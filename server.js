@@ -111,6 +111,62 @@ function formatSaveRow(row) {
   };
 }
 
+function formatHistoryRow(row, includeSave = false) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    version: Number(row.save_version) || 0,
+    updatedAt: asIso(row.updated_at),
+    clientUpdatedAt: asIso(row.client_updated_at),
+    ...(includeSave ? { save: row.data } : {})
+  };
+}
+
+async function insertHistorySnapshot(client, snapshot) {
+  if (!snapshot?.userId || !snapshot?.version || !snapshot?.data) return;
+  await client.query(
+    `
+      INSERT INTO user_save_history (
+        user_id,
+        save_version,
+        data,
+        updated_at,
+        client_updated_at
+      )
+      VALUES ($1, $2, $3::jsonb, $4::timestamptz, $5::timestamptz)
+      ON CONFLICT (user_id, save_version)
+      DO UPDATE SET
+        data = EXCLUDED.data,
+        updated_at = EXCLUDED.updated_at,
+        client_updated_at = EXCLUDED.client_updated_at
+    `,
+    [
+      snapshot.userId,
+      snapshot.version,
+      JSON.stringify(snapshot.data),
+      asIso(snapshot.updatedAt) || new Date().toISOString(),
+      asIso(snapshot.clientUpdatedAt)
+    ]
+  );
+}
+
+async function pruneHistorySnapshots(client, userId) {
+  await client.query(
+    `
+      DELETE FROM user_save_history
+      WHERE user_id = $1
+        AND id NOT IN (
+          SELECT id
+          FROM user_save_history
+          WHERE user_id = $1
+          ORDER BY save_version DESC, id DESC
+          LIMIT 3
+        )
+    `,
+    [userId]
+  );
+}
+
 async function initDb() {
   if (!pool) return;
   await pool.query(`
@@ -143,12 +199,28 @@ async function initDb() {
     );
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_save_history (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      save_version BIGINT NOT NULL,
+      data JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      client_updated_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (user_id, save_version)
+    );
+  `);
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS user_sessions_user_id_idx
     ON user_sessions (user_id);
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS user_sessions_expires_at_idx
     ON user_sessions (expires_at);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS user_save_history_user_id_idx
+    ON user_save_history (user_id, save_version DESC);
   `);
 }
 
@@ -400,6 +472,26 @@ app.get('/api/save', requireAuth, async (req, res, next) => {
   }
 });
 
+app.get('/api/save/history', requireAuth, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `
+        SELECT id, save_version, updated_at, client_updated_at
+        FROM user_save_history
+        WHERE user_id = $1
+        ORDER BY save_version DESC, id DESC
+        LIMIT 3
+      `,
+      [req.user.id]
+    );
+    res.json({
+      history: result.rows.map(row => formatHistoryRow(row))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.put('/api/save', requireAuth, async (req, res, next) => {
   const nextState = req.body?.state;
   const force = Boolean(req.body?.force);
@@ -442,6 +534,14 @@ app.put('/api/save', requireAuth, async (req, res, next) => {
         `,
         [req.user.id, encodedState, clientUpdatedAt]
       );
+      await insertHistorySnapshot(client, {
+        userId: req.user.id,
+        version: inserted.rows[0].version,
+        data: inserted.rows[0].data,
+        updatedAt: inserted.rows[0].updated_at,
+        clientUpdatedAt: inserted.rows[0].client_updated_at
+      });
+      await pruneHistorySnapshots(client, req.user.id);
       await client.query('COMMIT');
       return res.json(formatSaveRow(inserted.rows[0]));
     }
@@ -456,6 +556,14 @@ app.put('/api/save', requireAuth, async (req, res, next) => {
       });
     }
 
+    await insertHistorySnapshot(client, {
+      userId: req.user.id,
+      version: currentVersion,
+      data: current.data,
+      updatedAt: current.updated_at,
+      clientUpdatedAt: current.client_updated_at
+    });
+
     const updated = await client.query(
       `
         UPDATE user_saves
@@ -469,8 +577,108 @@ app.put('/api/save', requireAuth, async (req, res, next) => {
       `,
       [req.user.id, encodedState, currentVersion + 1, clientUpdatedAt]
     );
+    await insertHistorySnapshot(client, {
+      userId: req.user.id,
+      version: updated.rows[0].version,
+      data: updated.rows[0].data,
+      updatedAt: updated.rows[0].updated_at,
+      clientUpdatedAt: updated.rows[0].client_updated_at
+    });
+    await pruneHistorySnapshots(client, req.user.id);
     await client.query('COMMIT');
     res.json(formatSaveRow(updated.rows[0]));
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {}
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/save/restore', requireAuth, async (req, res, next) => {
+  const historyId =
+    typeof req.body?.historyId === 'number' && Number.isFinite(req.body.historyId)
+      ? Math.floor(req.body.historyId)
+      : null;
+  const clientUpdatedAt = asIso(req.body?.clientUpdatedAt) || new Date().toISOString();
+
+  if (!historyId || historyId < 1) {
+    return res.status(400).json({ error: 'A valid cloud history version is required.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const currentResult = await client.query(
+      `
+        SELECT data, version, updated_at, client_updated_at
+        FROM user_saves
+        WHERE user_id = $1
+        FOR UPDATE
+      `,
+      [req.user.id]
+    );
+    if (!currentResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'There is no cloud save to restore yet.' });
+    }
+
+    const historyResult = await client.query(
+      `
+        SELECT id, save_version, data, updated_at, client_updated_at
+        FROM user_save_history
+        WHERE user_id = $1 AND id = $2
+        LIMIT 1
+      `,
+      [req.user.id, historyId]
+    );
+    if (!historyResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'That cloud version could not be found.' });
+    }
+
+    const current = currentResult.rows[0];
+    const selected = historyResult.rows[0];
+    const currentVersion = Number(current.version) || 0;
+
+    await insertHistorySnapshot(client, {
+      userId: req.user.id,
+      version: currentVersion,
+      data: current.data,
+      updatedAt: current.updated_at,
+      clientUpdatedAt: current.client_updated_at
+    });
+
+    const restored = await client.query(
+      `
+        UPDATE user_saves
+        SET
+          data = $2::jsonb,
+          version = $3,
+          updated_at = NOW(),
+          client_updated_at = $4::timestamptz
+        WHERE user_id = $1
+        RETURNING data, version, updated_at, client_updated_at
+      `,
+      [req.user.id, JSON.stringify(selected.data), currentVersion + 1, clientUpdatedAt]
+    );
+
+    await insertHistorySnapshot(client, {
+      userId: req.user.id,
+      version: restored.rows[0].version,
+      data: restored.rows[0].data,
+      updatedAt: restored.rows[0].updated_at,
+      clientUpdatedAt: restored.rows[0].client_updated_at
+    });
+    await pruneHistorySnapshots(client, req.user.id);
+    await client.query('COMMIT');
+
+    res.json({
+      restoredFrom: formatHistoryRow(selected),
+      current: formatSaveRow(restored.rows[0])
+    });
   } catch (error) {
     try {
       await client.query('ROLLBACK');

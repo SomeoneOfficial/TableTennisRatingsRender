@@ -19,7 +19,10 @@ if ('serviceWorker' in navigator) {
     syncing: false,
     pendingSync: false,
     lastSyncMessage: 'Local-only mode',
-    lastSyncAt: null
+    lastSyncAt: null,
+    cloudHistory: [],
+    cloudHistoryLoading: false,
+    cloudHistoryError: ''
   };
 
   let syncTimer = null;
@@ -64,12 +67,24 @@ if ('serviceWorker' in navigator) {
     return Number.isFinite(stamp) ? stamp : 0;
   }
 
-  function hasRemoteNewerData(remoteSave) {
-    const remoteStamp = toMillis(
-      remoteSave?.save?.syncMeta?.lastLocalChangeAt ||
-        remoteSave?.clientUpdatedAt ||
-        remoteSave?.updatedAt
+  function getLatestIso(...values) {
+    let newest = 0;
+    values.forEach(value => {
+      newest = Math.max(newest, toMillis(value));
+    });
+    return newest ? new Date(newest).toISOString() : null;
+  }
+
+  function getRemoteChangeMillis(remotePayload) {
+    return Math.max(
+      toMillis(remotePayload?.save?.syncMeta?.lastLocalChangeAt),
+      toMillis(remotePayload?.clientUpdatedAt),
+      toMillis(remotePayload?.updatedAt)
     );
+  }
+
+  function hasRemoteNewerData(remoteSave) {
+    const remoteStamp = getRemoteChangeMillis(remoteSave);
     const localStamp = toMillis(state?.syncMeta?.lastLocalChangeAt);
     const remoteVersion = Number(remoteSave?.version || 0);
     const localVersion = Number(state?.syncMeta?.serverVersion || 0);
@@ -258,6 +273,7 @@ if ('serviceWorker' in navigator) {
       'auth-modal-register-btn',
       'auth-modal-skip-btn',
       'sync-now-btn',
+      'pull-cloud-btn',
       'header-login-btn',
       'header-sync-btn',
       'logout-btn',
@@ -274,6 +290,7 @@ if ('serviceWorker' in navigator) {
     const signedOutCard = document.getElementById('auth-signed-out');
     const signedInCard = document.getElementById('auth-signed-in');
     const syncNowBtn = document.getElementById('sync-now-btn');
+    const pullCloudBtn = document.getElementById('pull-cloud-btn');
     const logoutBtn = document.getElementById('logout-btn');
     const headerLoginBtn = document.getElementById('header-login-btn');
     const headerSyncBtn = document.getElementById('header-sync-btn');
@@ -318,6 +335,9 @@ if ('serviceWorker' in navigator) {
     });
     if (syncNowBtn) {
       syncNowBtn.disabled = !authState.authenticated || authState.syncing || authState.busy;
+    }
+    if (pullCloudBtn) {
+      pullCloudBtn.disabled = !authState.authenticated || authState.syncing || authState.busy;
     }
     if (logoutBtn) {
       logoutBtn.style.display = authState.authenticated ? 'inline-flex' : 'none';
@@ -372,6 +392,95 @@ if ('serviceWorker' in navigator) {
           ? 'Local storage only until sign-in'
           : 'Login server not ready';
     }
+    updateCloudHistoryUI();
+  }
+
+  function updateCloudHistoryUI() {
+    const statusNode = document.getElementById('cloud-history-status');
+    const listNode = document.getElementById('cloud-history-list');
+    const refreshBtn = document.getElementById('cloud-history-refresh-btn');
+    const currentVersion = Number(ensureSyncMeta().serverVersion || 0);
+
+    if (refreshBtn) {
+      refreshBtn.disabled =
+        authState.busy || authState.cloudHistoryLoading || !authState.authenticated;
+    }
+    if (!statusNode || !listNode) return;
+
+    if (!authState.cloudEnabled) {
+      statusNode.textContent = 'Cloud history needs the Render web service and database deployment.';
+      listNode.innerHTML = '<div class="cloud-history-empty">Cloud version history is unavailable until the server database is configured.</div>';
+      return;
+    }
+    if (!authState.authenticated) {
+      statusNode.textContent = 'Sign in to view and restore cloud versions.';
+      listNode.innerHTML = '<div class="cloud-history-empty">Cloud rollback becomes available after you sign in and save to the cloud.</div>';
+      return;
+    }
+    if (authState.cloudHistoryLoading) {
+      statusNode.textContent = 'Loading cloud history...';
+      if (!authState.cloudHistory.length) {
+        listNode.innerHTML = '<div class="cloud-history-empty">Loading your recent cloud versions...</div>';
+      }
+      return;
+    }
+    if (authState.cloudHistoryError) {
+      statusNode.textContent = authState.cloudHistoryError;
+      if (!authState.cloudHistory.length) {
+        listNode.innerHTML = '<div class="cloud-history-empty">Could not load cloud history right now.</div>';
+      }
+      return;
+    }
+    if (!authState.cloudHistory.length) {
+      statusNode.textContent = 'No cloud history yet. The first three signed-in saves will build your rollback list.';
+      listNode.innerHTML = '<div class="cloud-history-empty">No cloud versions have been stored yet.</div>';
+      return;
+    }
+
+    statusNode.textContent = 'The newest three cloud versions are available below.';
+    listNode.innerHTML = authState.cloudHistory.map(item => {
+      const isCurrent = Number(item.version || 0) === currentVersion;
+      const when = item.updatedAt
+        ? new Date(item.updatedAt).toLocaleString()
+        : 'Unknown time';
+      const disabled = isCurrent || authState.busy || authState.cloudHistoryLoading;
+      return `
+        <div class="cloud-history-item">
+          <div class="cloud-history-meta">
+            <div class="cloud-history-title">Cloud Version v${item.version}${isCurrent ? ' (Current)' : ''}</div>
+            <div class="cloud-history-sub">Saved ${when}</div>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="restoreCloudVersion(${item.id})" ${disabled ? 'disabled' : ''}>${isCurrent ? 'Current' : 'Restore'}</button>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function loadCloudHistory() {
+    if (!authState.cloudEnabled || !authState.authenticated) {
+      authState.cloudHistory = [];
+      authState.cloudHistoryLoading = false;
+      authState.cloudHistoryError = '';
+      updateCloudHistoryUI();
+      return [];
+    }
+
+    authState.cloudHistoryLoading = true;
+    authState.cloudHistoryError = '';
+    updateCloudHistoryUI();
+    try {
+      const payload = await fetchJson('/api/save/history', { method: 'GET' });
+      authState.cloudHistory = Array.isArray(payload?.history) ? payload.history : [];
+      authState.cloudHistoryError = '';
+      return authState.cloudHistory;
+    } catch (error) {
+      authState.cloudHistory = [];
+      authState.cloudHistoryError = error.message || 'Could not load cloud history.';
+      throw error;
+    } finally {
+      authState.cloudHistoryLoading = false;
+      updateCloudHistoryUI();
+    }
   }
 
   function applyRemoteState(remotePayload, toastMessage) {
@@ -382,12 +491,12 @@ if ('serviceWorker' in navigator) {
         window.ensureStateDefaults();
       }
       const meta = ensureSyncMeta();
-      meta.lastLocalChangeAt =
-        remotePayload.save?.syncMeta?.lastLocalChangeAt ||
-        remotePayload.clientUpdatedAt ||
-        remotePayload.updatedAt ||
-        meta.lastLocalChangeAt ||
-        new Date().toISOString();
+      meta.lastLocalChangeAt = getLatestIso(
+        remotePayload.save?.syncMeta?.lastLocalChangeAt,
+        remotePayload.clientUpdatedAt,
+        remotePayload.updatedAt,
+        meta.lastLocalChangeAt
+      ) || new Date().toISOString();
       markServerVersion(meta, remotePayload);
       persistCurrentState();
       if (typeof window.renderAll === 'function') {
@@ -422,6 +531,7 @@ if ('serviceWorker' in navigator) {
       });
       authState.lastSyncAt = saved.updatedAt || new Date().toISOString();
       setSyncMessage(`Cloud save updated${reason ? ` (${reason})` : ''}`);
+      loadCloudHistory().catch(() => {});
       return saved;
     } catch (error) {
       if (error.status === 409 && attempt < 1 && error.payload?.current) {
@@ -437,7 +547,7 @@ if ('serviceWorker' in navigator) {
     }
   }
 
-  async function syncNow(reason = 'manual') {
+  async function uploadToCloud(reason = 'manual') {
     if (!authState.cloudEnabled || !authState.authenticated) {
       updateAuthUI();
       return null;
@@ -461,8 +571,11 @@ if ('serviceWorker' in navigator) {
         localMeta.accountEmail !== authState.email;
 
       if (remoteHasState && (accountMismatch || hasRemoteNewerData(remote))) {
-        applyRemoteState(remote, 'Loaded the newer cloud save.');
-        setSyncMessage('Using newer data from the cloud');
+        setSyncMessage('Newer cloud data exists. Use Download From Cloud in Settings if you want to bring it down.');
+        loadCloudHistory().catch(() => {});
+        if (reason === 'manual' && typeof window.showToast === 'function') {
+          window.showToast('Cloud has newer data. Download it from Settings if you want to replace this device.', 'error');
+        }
         return remote;
       }
 
@@ -479,7 +592,8 @@ if ('serviceWorker' in navigator) {
           markServerVersion(meta, remote);
           persistCurrentState();
         });
-        setSyncMessage('Cloud account is ready');
+        setSyncMessage('Cloud account is ready for uploads');
+        loadCloudHistory().catch(() => {});
         return remote;
       }
 
@@ -488,30 +602,30 @@ if ('serviceWorker' in navigator) {
       if (localSnapshot === remoteSnapshot) {
         persistStateWithoutTouch(() => {
           const meta = ensureSyncMeta();
-          if (!meta.lastLocalChangeAt) {
-            meta.lastLocalChangeAt =
-              remote.save?.syncMeta?.lastLocalChangeAt ||
-              remote.clientUpdatedAt ||
-              remote.updatedAt ||
-              new Date().toISOString();
-          }
+          if (!meta.lastLocalChangeAt) meta.lastLocalChangeAt = new Date().toISOString();
+          meta.lastLocalChangeAt = getLatestIso(
+            meta.lastLocalChangeAt,
+            remote.save?.syncMeta?.lastLocalChangeAt,
+            remote.clientUpdatedAt,
+            remote.updatedAt
+          ) || meta.lastLocalChangeAt;
           markServerVersion(meta, remote);
           persistCurrentState();
         });
-        setSyncMessage('Local and cloud data are in sync');
+        setSyncMessage('Local and cloud data already match');
+        loadCloudHistory().catch(() => {});
         return remote;
       }
 
-      const remoteStamp = toMillis(
-        remote.save?.syncMeta?.lastLocalChangeAt ||
-          remote.clientUpdatedAt ||
-          remote.updatedAt
-      );
+      const remoteStamp = getRemoteChangeMillis(remote);
       const localStamp = toMillis(localMeta.lastLocalChangeAt);
 
       if (remoteStamp > localStamp) {
-        applyRemoteState(remote, 'Loaded the newer cloud save.');
-        setSyncMessage('Using newer data from the cloud');
+        setSyncMessage('Cloud data is newer. Use Download From Cloud in Settings if you want to replace local data.');
+        loadCloudHistory().catch(() => {});
+        if (reason === 'manual' && typeof window.showToast === 'function') {
+          window.showToast('Push was skipped because the cloud save is newer.', 'error');
+        }
         return remote;
       }
 
@@ -520,6 +634,8 @@ if ('serviceWorker' in navigator) {
       if (error.status === 401) {
         authState.authenticated = false;
         authState.email = '';
+        authState.cloudHistory = [];
+        authState.cloudHistoryError = '';
         setSyncMessage('Sign in again to sync');
       } else {
         setSyncMessage(error.message || 'Cloud sync failed');
@@ -538,11 +654,58 @@ if ('serviceWorker' in navigator) {
     }
   }
 
+  async function downloadFromCloud(reason = 'manual') {
+    if (!authState.cloudEnabled || !authState.authenticated) {
+      updateAuthUI();
+      return null;
+    }
+
+    setAuthBusy(true);
+    try {
+      const remote = await fetchJson('/api/save');
+      if (!remote?.save) {
+        setSyncMessage('There is no cloud save to download yet.');
+        if (reason === 'manual' && typeof window.showToast === 'function') {
+          window.showToast('No cloud save is available yet.', 'error');
+        }
+        await loadCloudHistory().catch(() => {});
+        return null;
+      }
+
+      const localSnapshot = getComparableSnapshot();
+      const remoteSnapshot = getComparableSnapshot(remote.save);
+      const localHasMeaningfulData = hasMeaningfulStateData();
+      const remoteIsOlder = getRemoteChangeMillis(remote) < toMillis(ensureSyncMeta().lastLocalChangeAt);
+
+      if (localHasMeaningfulData && localSnapshot !== remoteSnapshot) {
+        const message = remoteIsOlder
+          ? 'The cloud save looks older than your local data. Download it anyway and replace this device?'
+          : 'Download the cloud save and replace this device data with it?';
+        if (!window.confirm(message)) {
+          return null;
+        }
+      }
+
+      applyRemoteState(remote, 'Downloaded the cloud save to this device.');
+      setSyncMessage('Downloaded cloud save to this device');
+      await loadCloudHistory().catch(() => {});
+      return remote;
+    } catch (error) {
+      setSyncMessage(error.message || 'Could not download the cloud save.');
+      if (reason === 'manual' && typeof window.showToast === 'function') {
+        window.showToast(error.message || 'Could not download the cloud save.', 'error');
+      }
+      throw error;
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
   function scheduleSync(reason = 'auto') {
     if (!authState.cloudEnabled || !authState.authenticated) return;
     clearTimeout(syncTimer);
     syncTimer = window.setTimeout(() => {
-      syncNow(reason).catch(() => {});
+      uploadToCloud(reason).catch(() => {});
     }, 1200);
   }
 
@@ -562,8 +725,11 @@ if ('serviceWorker' in navigator) {
       }
       updateAuthUI();
       if (authState.authenticated) {
-        await syncNow('startup');
+        await uploadToCloud('startup');
+        await loadCloudHistory().catch(() => {});
       } else {
+        authState.cloudHistory = [];
+        authState.cloudHistoryError = '';
         setSyncMessage(authState.cloudEnabled ? 'Local-only mode' : 'Cloud sync unavailable');
       }
       maybeShowAuthPrompt();
@@ -572,6 +738,8 @@ if ('serviceWorker' in navigator) {
       authState.cloudEnabled = false;
       authState.authenticated = false;
       authState.email = '';
+      authState.cloudHistory = [];
+      authState.cloudHistoryError = '';
       syncAuthFieldValues(getLastAccountEmail(), '');
       setSyncMessage('Cloud sync unavailable');
       updateAuthUI();
@@ -602,12 +770,15 @@ if ('serviceWorker' in navigator) {
       markLoginPromptSeen();
       hideAuthPrompt();
       ensureSyncMeta().accountEmail = authState.email;
+      authState.cloudHistory = [];
+      authState.cloudHistoryError = '';
       setSyncMessage('Signed in. Checking cloud data...');
       updateAuthUI();
       if (typeof window.showToast === 'function') {
         window.showToast(successMessage, 'success');
       }
-      await syncNow('auth');
+      await uploadToCloud('auth');
+      await loadCloudHistory().catch(() => {});
       syncAuthFieldValues(authState.email, '');
     } catch (error) {
       setAuthFormError(error.message || 'Could not sign in.');
@@ -625,6 +796,8 @@ if ('serviceWorker' in navigator) {
       });
       authState.authenticated = false;
       authState.email = '';
+      authState.cloudHistory = [];
+      authState.cloudHistoryError = '';
       syncAuthFieldValues(getLastAccountEmail(), '');
       setSyncMessage('Signed out. Local save is still available.');
       updateAuthUI();
@@ -633,6 +806,36 @@ if ('serviceWorker' in navigator) {
       }
     } catch (error) {
       setAuthFormError(error.message || 'Could not sign out.');
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function restoreCloudVersion(historyId) {
+    if (!authState.authenticated || !historyId) return;
+    if (!window.confirm('Restore this cloud version? The current cloud save will stay protected in the version history.')) {
+      return;
+    }
+
+    setAuthBusy(true);
+    try {
+      const payload = await fetchJson('/api/save/restore', {
+        method: 'POST',
+        body: JSON.stringify({
+          historyId,
+          clientUpdatedAt: new Date().toISOString()
+        })
+      });
+      if (payload?.current) {
+        applyRemoteState(payload.current, `Restored cloud version v${payload?.restoredFrom?.version || ''}.`);
+      }
+      setSyncMessage(`Restored cloud version v${payload?.restoredFrom?.version || ''}`);
+      await loadCloudHistory().catch(() => {});
+    } catch (error) {
+      setSyncMessage(error.message || 'Could not restore cloud version.');
+      if (typeof window.showToast === 'function') {
+        window.showToast(error.message || 'Could not restore cloud version.', 'error');
+      }
     } finally {
       setAuthBusy(false);
     }
@@ -668,17 +871,17 @@ if ('serviceWorker' in navigator) {
   function setupSyncEventHooks() {
     window.addEventListener('online', () => {
       if (authState.authenticated) {
-        syncNow('online').catch(() => {});
+        uploadToCloud('online').catch(() => {});
       }
     });
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && authState.authenticated) {
-        syncNow('resume').catch(() => {});
+        uploadToCloud('resume').catch(() => {});
       }
     });
     window.setInterval(() => {
       if (authState.authenticated && !document.hidden) {
-        syncNow('interval').catch(() => {});
+        uploadToCloud('interval').catch(() => {});
       }
     }, 60000);
   }
@@ -727,8 +930,17 @@ if ('serviceWorker' in navigator) {
   };
 
   window.logoutAccount = logoutAccount;
+  window.downloadFromCloud = function downloadFromCloudFromUi() {
+    return downloadFromCloud('manual').catch(() => {});
+  };
+  window.refreshCloudHistory = function refreshCloudHistory() {
+    return loadCloudHistory().catch(() => {});
+  };
+  window.restoreCloudVersion = function restoreCloudVersionFromUi(historyId) {
+    return restoreCloudVersion(historyId);
+  };
   window.syncNow = function syncNowFromUi() {
-    return syncNow('manual').catch(() => {});
+    return uploadToCloud('manual').catch(() => {});
   };
 
   if (document.readyState === 'loading') {

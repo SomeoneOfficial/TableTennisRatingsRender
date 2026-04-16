@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" id="viewport-meta" content="width=device-width, initial-scale=1.0">
 <title>RankMaster Pro</title>
+<meta name="theme-color" content="#07070d">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192x192.png">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -749,6 +755,18 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
   background:rgba(90,180,240,.08);border:1px solid rgba(90,180,240,.16);
   color:var(--muted);font-size:.8rem;
 }
+.cloud-history-list{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
+.cloud-history-item{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  padding:10px 12px;border-radius:10px;background:var(--surface2);border:1px solid var(--border);
+}
+.cloud-history-meta{display:flex;flex-direction:column;gap:3px;min-width:180px;flex:1;}
+.cloud-history-title{font-weight:700;color:var(--text);}
+.cloud-history-sub{font-size:.78rem;color:var(--muted);}
+.cloud-history-empty{
+  margin-top:12px;padding:12px;border-radius:10px;background:var(--surface2);
+  border:1px dashed var(--border);font-size:.82rem;color:var(--muted);
+}
 </style>
 </head>
 <body>
@@ -760,7 +778,7 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
   </div>
   <div class="header-actions">
     <button class="btn btn-primary btn-sm" id="header-login-btn" onclick="openAuthPrompt()" style="display:none">Log In</button>
-    <button class="btn btn-secondary btn-sm" id="header-sync-btn" onclick="syncNow()" style="display:none">☁ Sync Now</button>
+    <button class="btn btn-secondary btn-sm" id="header-sync-btn" onclick="syncNow()" style="display:none">☁ Push To Cloud</button>
     <button class="btn btn-secondary btn-sm" id="header-logout-btn" onclick="logoutAccount()" style="display:none">Log Out</button>
     <button class="btn btn-secondary btn-sm" onclick="downloadJSON()">⬇ Export</button>
     <label class="btn btn-secondary btn-sm" style="cursor:pointer">⬆ Import<input type="file" accept=".json" onchange="importJSON(event)" style="display:none"></label>
@@ -1177,7 +1195,7 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
           </div>
           <div class="settings-action">
             <div class="sa-title">Cloud Sync Status</div>
-            <div class="sa-desc">Local storage stays enabled for fast/offline-ish saves. When signed in, the app checks whether the database has a newer version and syncs the latest state for this account.</div>
+            <div class="sa-desc">Push uploads this device to the cloud. Download pulls the current cloud save onto this device. Local storage stays enabled either way.</div>
             <div class="auth-stats">
               <div class="auth-stat-row"><span>Status</span><strong id="sync-status-text">Local-only mode</strong></div>
               <div class="auth-stat-row"><span>Cloud Version</span><strong id="sync-version-text">Local only</strong></div>
@@ -1186,10 +1204,20 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
               <div class="auth-stat-row"><span>Save Mode</span><strong id="cloud-mode-text">Local storage only</strong></div>
             </div>
             <div class="auth-btn-row" style="margin-top:12px">
-              <button class="btn btn-secondary btn-sm" id="sync-now-btn" onclick="syncNow()" disabled>☁ Sync Now</button>
+              <button class="btn btn-secondary btn-sm" id="sync-now-btn" onclick="syncNow()" disabled>☁ Push To Cloud</button>
+              <button class="btn btn-secondary btn-sm" id="pull-cloud-btn" onclick="downloadFromCloud()" disabled>⬇ Download From Cloud</button>
               <button class="btn btn-secondary btn-sm" id="logout-btn" onclick="logoutAccount()" style="display:none">Log Out</button>
             </div>
           </div>
+        </div>
+        <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:16px;">
+          <h3>Cloud Rollback</h3>
+          <div class="auth-note">The last three cloud saves are kept online so you can restore a recent version if something goes wrong.</div>
+          <div class="auth-btn-row" style="margin-top:12px">
+            <button class="btn btn-secondary btn-sm" id="cloud-history-refresh-btn" onclick="refreshCloudHistory()">Refresh History</button>
+          </div>
+          <div class="auth-note" id="cloud-history-status">Sign in to view cloud history.</div>
+          <div class="cloud-history-list" id="cloud-history-list"></div>
         </div>
       </div>
       <div class="settings-section">
