@@ -211,8 +211,24 @@ async function getSessionUser(req) {
   return {
     id: Number(row.user_id),
     email: row.email,
+    sessionId: Number(row.session_id),
     sessionToken: rawToken
   };
+}
+
+async function refreshSessionLifetime(user) {
+  if (!pool || !user?.sessionId) return;
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  await pool.query(
+    `
+      UPDATE user_sessions
+      SET
+        last_seen_at = NOW(),
+        expires_at = $2
+      WHERE id = $1
+    `,
+    [user.sessionId, expiresAt]
+  );
 }
 
 async function requireAuth(req, res, next) {
@@ -226,6 +242,8 @@ async function requireAuth(req, res, next) {
     if (!user) {
       return res.status(401).json({ error: 'You need to sign in first.' });
     }
+    await refreshSessionLifetime(user);
+    setSessionCookie(res, user.sessionToken);
     req.user = user;
     next();
   } catch (error) {
@@ -249,6 +267,10 @@ app.get('/api/auth/session', async (req, res, next) => {
       });
     }
     const user = await getSessionUser(req);
+    if (user) {
+      await refreshSessionLifetime(user);
+      setSessionCookie(res, user.sessionToken);
+    }
     res.json({
       cloudEnabled: true,
       authenticated: Boolean(user),

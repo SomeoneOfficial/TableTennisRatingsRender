@@ -105,7 +105,7 @@ if ('serviceWorker' in navigator) {
   }
 
   function showAuthPrompt() {
-    if (!authState.cloudEnabled || authState.authenticated) return;
+    if (authState.authenticated) return;
     const modal = getAuthModal();
     if (!modal) return;
     modal.classList.add('show');
@@ -127,11 +127,24 @@ if ('serviceWorker' in navigator) {
   }
 
   function maybeShowAuthPrompt() {
-    if (authState.cloudEnabled && !authState.authenticated && !hasSeenLoginPrompt()) {
+    if (!authState.authenticated && !hasSeenLoginPrompt()) {
       showAuthPrompt();
-    } else if (authState.authenticated || !authState.cloudEnabled) {
+    } else if (authState.authenticated) {
       hideAuthPrompt();
     }
+  }
+
+  function syncAuthFieldValues(sourceEmail = '', sourcePassword = '') {
+    const email = String(sourceEmail || '').trim();
+    const password = String(sourcePassword || '');
+    ['auth-email', 'auth-modal-email'].forEach(id => {
+      const field = document.getElementById(id);
+      if (field && field.value !== email) field.value = email;
+    });
+    ['auth-password', 'auth-modal-password'].forEach(id => {
+      const field = document.getElementById(id);
+      if (field && field.value !== password) field.value = password;
+    });
   }
 
   function getAuthFields() {
@@ -215,6 +228,7 @@ if ('serviceWorker' in navigator) {
     const { emailField, passwordField, altEmailField, altPasswordField } = getAuthFields();
     const emailValue = String(emailField?.value || altEmailField?.value || '').trim();
     const passwordValue = String(passwordField?.value || altPasswordField?.value || '');
+    syncAuthFieldValues(emailValue, passwordValue);
     return {
       email: emailValue,
       password: passwordValue
@@ -288,8 +302,7 @@ if ('serviceWorker' in navigator) {
         : 'Local Save';
 
     if (signedOutCard) {
-      signedOutCard.style.display =
-        authState.cloudEnabled && !authState.authenticated ? 'block' : 'none';
+      signedOutCard.style.display = !authState.authenticated ? 'block' : 'none';
     }
     if (signedInCard) {
       signedInCard.style.display =
@@ -312,7 +325,7 @@ if ('serviceWorker' in navigator) {
     }
     if (headerLoginBtn) {
       headerLoginBtn.style.display =
-        authState.cloudEnabled && !authState.authenticated ? 'inline-flex' : 'none';
+        !authState.authenticated ? 'inline-flex' : 'none';
       headerLoginBtn.disabled = authState.busy;
     }
     if (headerSyncBtn) {
@@ -328,14 +341,14 @@ if ('serviceWorker' in navigator) {
     }
     if (authBannerTitle) {
       authBannerTitle.textContent = !authState.cloudEnabled
-        ? 'Cloud sync is not configured on this server'
+        ? 'Sign-in server is not configured yet'
         : authState.authenticated
           ? `Signed in as ${authState.email}`
           : 'Local mode is active';
     }
     if (authBannerSub) {
       authBannerSub.textContent = !authState.cloudEnabled
-        ? 'Add a database and redeploy on Render to enable account sync.'
+        ? 'The login UI is available, but this deployment still needs its Render database and session setup before email sign-in can complete.'
         : authState.authenticated
           ? 'This device keeps saving locally and also checks the database for newer account data.'
           : 'Your data is still saved locally. Sign in once on this device to sync it with your account.';
@@ -357,7 +370,7 @@ if ('serviceWorker' in navigator) {
         ? 'Local storage + account sync'
         : authState.cloudEnabled
           ? 'Local storage only until sign-in'
-          : 'Server storage unavailable';
+          : 'Login server not ready';
     }
   }
 
@@ -543,6 +556,9 @@ if ('serviceWorker' in navigator) {
       if (authState.email) {
         setLastAccountEmail(authState.email);
         ensureSyncMeta().accountEmail = authState.email;
+        syncAuthFieldValues(authState.email, '');
+      } else {
+        syncAuthFieldValues(getLastAccountEmail(), '');
       }
       updateAuthUI();
       if (authState.authenticated) {
@@ -556,6 +572,7 @@ if ('serviceWorker' in navigator) {
       authState.cloudEnabled = false;
       authState.authenticated = false;
       authState.email = '';
+      syncAuthFieldValues(getLastAccountEmail(), '');
       setSyncMessage('Cloud sync unavailable');
       updateAuthUI();
       maybeShowAuthPrompt();
@@ -569,6 +586,8 @@ if ('serviceWorker' in navigator) {
       setAuthFormError('Enter your email and password.');
       return;
     }
+
+    syncAuthFieldValues(email, password);
 
     setAuthBusy(true);
     try {
@@ -589,10 +608,7 @@ if ('serviceWorker' in navigator) {
         window.showToast(successMessage, 'success');
       }
       await syncNow('auth');
-      ['auth-password', 'auth-modal-password'].forEach(id => {
-        const passwordField = document.getElementById(id);
-        if (passwordField) passwordField.value = '';
-      });
+      syncAuthFieldValues(authState.email, '');
     } catch (error) {
       setAuthFormError(error.message || 'Could not sign in.');
     } finally {
@@ -609,6 +625,7 @@ if ('serviceWorker' in navigator) {
       });
       authState.authenticated = false;
       authState.email = '';
+      syncAuthFieldValues(getLastAccountEmail(), '');
       setSyncMessage('Signed out. Local save is still available.');
       updateAuthUI();
       if (typeof window.showToast === 'function') {
@@ -669,6 +686,21 @@ if ('serviceWorker' in navigator) {
   function initCloudSync() {
     ensureSyncMeta();
     wrapSaveState();
+    syncAuthFieldValues(getLastAccountEmail(), '');
+    ['auth-email', 'auth-modal-email', 'auth-password', 'auth-modal-password'].forEach(id => {
+      const field = document.getElementById(id);
+      if (!field) return;
+      field.addEventListener('input', () => {
+        const { email, password } = readAuthFormValues();
+        syncAuthFieldValues(email, password);
+      });
+      field.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          loginAccount();
+        }
+      });
+    });
     updateAuthUI();
     setupSyncEventHooks();
     refreshSession();
