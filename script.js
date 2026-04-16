@@ -9,6 +9,7 @@ if ('serviceWorker' in navigator) {
 (function () {
   const DEVICE_ID_KEY = 'rankmaster_pro_device_id';
   const LAST_ACCOUNT_KEY = 'rankmaster_pro_last_account_email';
+  const LOGIN_PROMPT_SEEN_KEY = 'rankmaster_pro_login_prompt_seen';
   const authState = {
     ready: false,
     busy: false,
@@ -87,6 +88,66 @@ if ('serviceWorker' in navigator) {
     return localStorage.getItem(LAST_ACCOUNT_KEY) || '';
   }
 
+  function hasSeenLoginPrompt() {
+    return localStorage.getItem(LOGIN_PROMPT_SEEN_KEY) === '1';
+  }
+
+  function markLoginPromptSeen() {
+    localStorage.setItem(LOGIN_PROMPT_SEEN_KEY, '1');
+  }
+
+  function getAuthModal() {
+    return document.getElementById('auth-start-modal');
+  }
+
+  function isAuthPromptVisible() {
+    return getAuthModal()?.classList.contains('show') || false;
+  }
+
+  function showAuthPrompt() {
+    if (!authState.cloudEnabled || authState.authenticated) return;
+    const modal = getAuthModal();
+    if (!modal) return;
+    modal.classList.add('show');
+    const email = getLastAccountEmail();
+    const modalEmail = document.getElementById('auth-modal-email');
+    const settingsEmail = document.getElementById('auth-email');
+    if (modalEmail && !modalEmail.value && email) modalEmail.value = email;
+    if (settingsEmail && !settingsEmail.value && email) settingsEmail.value = email;
+    window.setTimeout(() => {
+      const target = document.getElementById('auth-modal-email');
+      if (target) target.focus();
+    }, 0);
+  }
+
+  function hideAuthPrompt() {
+    const modal = getAuthModal();
+    if (!modal) return;
+    modal.classList.remove('show');
+  }
+
+  function maybeShowAuthPrompt() {
+    if (authState.cloudEnabled && !authState.authenticated && !hasSeenLoginPrompt()) {
+      showAuthPrompt();
+    } else if (authState.authenticated || !authState.cloudEnabled) {
+      hideAuthPrompt();
+    }
+  }
+
+  function getAuthFields() {
+    const modalEmail = document.getElementById('auth-modal-email');
+    const modalPassword = document.getElementById('auth-modal-password');
+    const settingsEmail = document.getElementById('auth-email');
+    const settingsPassword = document.getElementById('auth-password');
+    const useModal =
+      isAuthPromptVisible() ||
+      Boolean(modalEmail?.value) ||
+      Boolean(modalPassword?.value);
+    return useModal
+      ? { emailField: modalEmail, passwordField: modalPassword, altEmailField: settingsEmail, altPasswordField: settingsPassword }
+      : { emailField: settingsEmail, passwordField: settingsPassword, altEmailField: modalEmail, altPasswordField: modalPassword };
+  }
+
   function setSyncMessage(message) {
     authState.lastSyncMessage = message;
     updateAuthUI();
@@ -151,25 +212,43 @@ if ('serviceWorker' in navigator) {
   }
 
   function readAuthFormValues() {
+    const { emailField, passwordField, altEmailField, altPasswordField } = getAuthFields();
+    const emailValue = String(emailField?.value || altEmailField?.value || '').trim();
+    const passwordValue = String(passwordField?.value || altPasswordField?.value || '');
     return {
-      email: String(document.getElementById('auth-email')?.value || '').trim(),
-      password: String(document.getElementById('auth-password')?.value || '')
+      email: emailValue,
+      password: passwordValue
     };
   }
 
   function clearAuthFormError() {
-    const errorNode = document.getElementById('auth-error');
-    if (errorNode) errorNode.textContent = '';
+    ['auth-error', 'auth-modal-error'].forEach(id => {
+      const errorNode = document.getElementById(id);
+      if (errorNode) errorNode.textContent = '';
+    });
   }
 
   function setAuthFormError(message) {
-    const errorNode = document.getElementById('auth-error');
-    if (errorNode) errorNode.textContent = message || '';
+    ['auth-error', 'auth-modal-error'].forEach(id => {
+      const errorNode = document.getElementById(id);
+      if (errorNode) errorNode.textContent = message || '';
+    });
   }
 
   function setAuthBusy(value) {
     authState.busy = Boolean(value);
-    const buttons = ['auth-login-btn', 'auth-register-btn', 'sync-now-btn', 'header-sync-btn', 'logout-btn', 'header-logout-btn'];
+    const buttons = [
+      'auth-login-btn',
+      'auth-register-btn',
+      'auth-modal-login-btn',
+      'auth-modal-register-btn',
+      'auth-modal-skip-btn',
+      'sync-now-btn',
+      'header-login-btn',
+      'header-sync-btn',
+      'logout-btn',
+      'header-logout-btn'
+    ];
     buttons.forEach(id => {
       const node = document.getElementById(id);
       if (node) node.disabled = value;
@@ -182,6 +261,7 @@ if ('serviceWorker' in navigator) {
     const signedInCard = document.getElementById('auth-signed-in');
     const syncNowBtn = document.getElementById('sync-now-btn');
     const logoutBtn = document.getElementById('logout-btn');
+    const headerLoginBtn = document.getElementById('header-login-btn');
     const headerSyncBtn = document.getElementById('header-sync-btn');
     const headerLogoutBtn = document.getElementById('header-logout-btn');
     const authStatusPill = document.getElementById('auth-status-pill');
@@ -218,12 +298,22 @@ if ('serviceWorker' in navigator) {
     if (signedInEmail) {
       signedInEmail.textContent = authState.email || getLastAccountEmail() || 'Not signed in';
     }
+    const rememberedEmail = getLastAccountEmail();
+    ['auth-email', 'auth-modal-email'].forEach(id => {
+      const field = document.getElementById(id);
+      if (field && !field.value && rememberedEmail) field.value = rememberedEmail;
+    });
     if (syncNowBtn) {
       syncNowBtn.disabled = !authState.authenticated || authState.syncing || authState.busy;
     }
     if (logoutBtn) {
       logoutBtn.style.display = authState.authenticated ? 'inline-flex' : 'none';
       logoutBtn.disabled = authState.busy;
+    }
+    if (headerLoginBtn) {
+      headerLoginBtn.style.display =
+        authState.cloudEnabled && !authState.authenticated ? 'inline-flex' : 'none';
+      headerLoginBtn.disabled = authState.busy;
     }
     if (headerSyncBtn) {
       headerSyncBtn.style.display = authState.authenticated ? 'inline-flex' : 'none';
@@ -460,6 +550,7 @@ if ('serviceWorker' in navigator) {
       } else {
         setSyncMessage(authState.cloudEnabled ? 'Local-only mode' : 'Cloud sync unavailable');
       }
+      maybeShowAuthPrompt();
     } catch (error) {
       authState.ready = true;
       authState.cloudEnabled = false;
@@ -467,6 +558,7 @@ if ('serviceWorker' in navigator) {
       authState.email = '';
       setSyncMessage('Cloud sync unavailable');
       updateAuthUI();
+      maybeShowAuthPrompt();
     }
   }
 
@@ -488,6 +580,8 @@ if ('serviceWorker' in navigator) {
       authState.authenticated = Boolean(result.authenticated);
       authState.email = result.email || email;
       setLastAccountEmail(authState.email);
+      markLoginPromptSeen();
+      hideAuthPrompt();
       ensureSyncMeta().accountEmail = authState.email;
       setSyncMessage('Signed in. Checking cloud data...');
       updateAuthUI();
@@ -495,8 +589,10 @@ if ('serviceWorker' in navigator) {
         window.showToast(successMessage, 'success');
       }
       await syncNow('auth');
-      const passwordField = document.getElementById('auth-password');
-      if (passwordField) passwordField.value = '';
+      ['auth-password', 'auth-modal-password'].forEach(id => {
+        const passwordField = document.getElementById(id);
+        if (passwordField) passwordField.value = '';
+      });
     } catch (error) {
       setAuthFormError(error.message || 'Could not sign in.');
     } finally {
@@ -584,6 +680,18 @@ if ('serviceWorker' in navigator) {
 
   window.registerAccount = function registerAccount() {
     return submitAuth('/api/auth/register', 'Account created successfully.');
+  };
+
+  window.openAuthPrompt = function openAuthPrompt() {
+    clearAuthFormError();
+    showAuthPrompt();
+  };
+
+  window.continueLocalMode = function continueLocalMode() {
+    markLoginPromptSeen();
+    hideAuthPrompt();
+    clearAuthFormError();
+    updateAuthUI();
   };
 
   window.logoutAccount = logoutAccount;

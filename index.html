@@ -741,6 +741,14 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
   margin-top:12px;padding:12px;border-radius:10px;
   background:var(--surface2);border:1px solid var(--border);
 }
+.auth-modal-copy{
+  margin:10px 0 14px;color:var(--text);font-size:.9rem;line-height:1.5;
+}
+.auth-modal-tips{
+  margin-top:12px;padding:10px 12px;border-radius:10px;
+  background:rgba(90,180,240,.08);border:1px solid rgba(90,180,240,.16);
+  color:var(--muted);font-size:.8rem;
+}
 </style>
 </head>
 <body>
@@ -764,6 +772,7 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
   </div>
   <div class="auth-banner-actions">
     <div class="auth-status-pill" id="auth-status-pill">Local Save</div>
+    <button class="btn btn-primary btn-sm" id="header-login-btn" onclick="openAuthPrompt()" style="display:none">Log In</button>
     <button class="btn btn-secondary btn-sm" id="header-sync-btn" onclick="syncNow()" style="display:none">☁ Sync Now</button>
     <button class="btn btn-secondary btn-sm" id="header-logout-btn" onclick="logoutAccount()" style="display:none">Log Out</button>
   </div>
@@ -1237,6 +1246,29 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
   </div>
 </div>
 </div><!-- .app -->
+
+<!-- STARTUP AUTH MODAL -->
+<div class="modal-overlay" id="auth-start-modal">
+  <div class="modal">
+    <h2>☁ Sign In to Sync</h2>
+    <div class="auth-modal-copy">
+      Sign in with email and password to keep this device linked to your account and sync the same data across devices.
+    </div>
+    <div class="auth-form-stack">
+      <input class="auth-field" type="email" id="auth-modal-email" placeholder="Email address" autocomplete="email">
+      <input class="auth-field" type="password" id="auth-modal-password" placeholder="Password (8+ characters)" autocomplete="current-password">
+    </div>
+    <div class="auth-btn-row" style="margin-top:14px">
+      <button class="btn btn-primary" id="auth-modal-login-btn" onclick="loginAccount()">Log In</button>
+      <button class="btn btn-secondary" id="auth-modal-register-btn" onclick="registerAccount()">Create Account</button>
+      <button class="btn btn-secondary" id="auth-modal-skip-btn" onclick="continueLocalMode()">Use Local Mode</button>
+    </div>
+    <div class="auth-error" id="auth-modal-error"></div>
+    <div class="auth-modal-tips">
+      After you log in once on this device, you should stay signed in between visits unless you log out.
+    </div>
+  </div>
+</div>
 
 <!-- EDIT PLAYER MODAL -->
 <div class="modal-overlay" id="edit-modal">
