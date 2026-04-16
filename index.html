@@ -78,6 +78,7 @@ header{
 }
 .logo small{font-family:'Barlow Condensed',sans-serif;font-size:.75rem;color:var(--muted);letter-spacing:.2em;text-transform:uppercase;display:block;margin-top:-4px;}
 .header-actions{display:flex;gap:8px;flex-wrap:wrap;}
+.header-cloud-actions{display:flex;gap:8px;flex-wrap:wrap;}
 
 /* BUTTONS */
 .btn{
@@ -773,13 +774,15 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
 <div class="app">
 <header>
   <div>
-    <div class="logo">Rank<span>Master</span><span class="ver-chip">v3.2d</span></div>
+    <div class="logo">Rank<span>Master</span><span class="ver-chip">v3.3.1</span></div>
     <small style="font-family:'Barlow Condensed',sans-serif;font-size:.72rem;color:var(--muted);letter-spacing:.18em;text-transform:uppercase">Pro Edition  Track Any Game</small>
   </div>
   <div class="header-actions">
     <button class="btn btn-primary btn-sm" id="header-login-btn" onclick="openAuthPrompt()" style="display:none">Log In</button>
-    <button class="btn btn-secondary btn-sm" id="header-sync-btn" onclick="syncNow()" style="display:none">☁ Push To Cloud</button>
-    <button class="btn btn-secondary btn-sm" id="header-pull-cloud-btn" onclick="downloadFromCloud()" style="display:none">⬇ Download From Cloud</button>
+    <div class="header-cloud-actions">
+      <button class="btn btn-secondary btn-sm" id="header-sync-btn" onclick="syncNow()" style="display:none">☁ Push To Cloud</button>
+      <button class="btn btn-secondary btn-sm" id="header-pull-cloud-btn" onclick="downloadFromCloud()" style="display:none">⬇ Download From Cloud</button>
+    </div>
     <button class="btn btn-secondary btn-sm" id="header-logout-btn" onclick="logoutAccount()" style="display:none">Log Out</button>
     <button class="btn btn-secondary btn-sm" onclick="downloadJSON()">⬇ Export</button>
     <label class="btn btn-secondary btn-sm" style="cursor:pointer">⬆ Import<input type="file" accept=".json" onchange="importJSON(event)" style="display:none"></label>
