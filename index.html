@@ -11,6 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192x192.png">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script>document.documentElement.classList.add('cloud-sync-pending');</script>
 <style>
 :root{
   --bg:#07070d;--surface:#0f0f1a;--surface2:#171726;--surface3:#1f1f32;
@@ -33,6 +34,8 @@ body.theme-arena{
 }
 *{margin:0;padding:0;box-sizing:border-box;}
 html{scroll-behavior:smooth;}
+html.cloud-sync-pending .app{opacity:0;pointer-events:none;}
+html.cloud-sync-pending .startup-sync-overlay{display:flex;}
 body{
   background:var(--bg);color:var(--text);
   font-family:'DM Sans',sans-serif;min-height:100vh;
@@ -767,9 +770,38 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
   margin-top:12px;padding:12px;border-radius:10px;background:var(--surface2);
   border:1px dashed var(--border);font-size:.82rem;color:var(--muted);
 }
+.startup-sync-overlay{
+  position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+  background:rgba(7,7,13,.92);z-index:1200;padding:20px;
+}
+.startup-sync-card{
+  width:min(420px,100%);padding:24px 22px;border-radius:16px;
+  border:1px solid rgba(240,192,64,.2);
+  background:linear-gradient(135deg,rgba(15,15,26,.98),rgba(23,23,38,.96));
+  box-shadow:0 20px 60px rgba(0,0,0,.35);text-align:center;
+}
+.startup-sync-spinner{
+  width:42px;height:42px;border-radius:50%;margin:0 auto 14px;
+  border:3px solid rgba(240,192,64,.2);border-top-color:var(--accent);
+  animation:spin 1s linear infinite;
+}
+.startup-sync-title{
+  font-family:'Bebas Neue',sans-serif;font-size:1.8rem;letter-spacing:.05em;color:var(--accent);
+}
+.startup-sync-sub{
+  margin-top:8px;font-size:.9rem;color:var(--text);line-height:1.45;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
 </style>
 </head>
 <body>
+<div class="startup-sync-overlay" id="startup-sync-overlay">
+  <div class="startup-sync-card">
+    <div class="startup-sync-spinner"></div>
+    <div class="startup-sync-title">Loading Cloud Data</div>
+    <div class="startup-sync-sub">Checking the latest account data so this device opens on the newest version.</div>
+  </div>
+</div>
 <div class="app">
 <header>
   <div>
@@ -779,6 +811,7 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
   <div class="header-actions">
     <button class="btn btn-primary btn-sm" id="header-login-btn" onclick="openAuthPrompt()" style="display:none">Log In</button>
     <button class="btn btn-secondary btn-sm" id="header-sync-btn" onclick="syncNow()" style="display:none">☁ Push To Cloud</button>
+    <button class="btn btn-secondary btn-sm" id="header-pull-cloud-btn" onclick="downloadFromCloud()" style="display:none">⬇ Download From Cloud</button>
     <button class="btn btn-secondary btn-sm" id="header-logout-btn" onclick="logoutAccount()" style="display:none">Log Out</button>
     <button class="btn btn-secondary btn-sm" onclick="downloadJSON()">⬇ Export</button>
     <label class="btn btn-secondary btn-sm" style="cursor:pointer">⬆ Import<input type="file" accept=".json" onchange="importJSON(event)" style="display:none"></label>

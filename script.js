@@ -209,6 +209,10 @@ if ('serviceWorker' in navigator) {
     updateAuthUI();
   }
 
+  function finishStartupSync() {
+    document.documentElement.classList.remove('cloud-sync-pending');
+  }
+
   function markServerVersion(meta, payload) {
     meta.serverVersion = Number(payload?.version || 0);
     meta.serverUpdatedAt = payload?.updatedAt || null;
@@ -304,6 +308,7 @@ if ('serviceWorker' in navigator) {
       'pull-cloud-btn',
       'header-login-btn',
       'header-sync-btn',
+      'header-pull-cloud-btn',
       'logout-btn',
       'header-logout-btn'
     ];
@@ -322,6 +327,7 @@ if ('serviceWorker' in navigator) {
     const logoutBtn = document.getElementById('logout-btn');
     const headerLoginBtn = document.getElementById('header-login-btn');
     const headerSyncBtn = document.getElementById('header-sync-btn');
+    const headerPullCloudBtn = document.getElementById('header-pull-cloud-btn');
     const headerLogoutBtn = document.getElementById('header-logout-btn');
     const authStatusPill = document.getElementById('auth-status-pill');
     const authBannerTitle = document.getElementById('auth-banner-title');
@@ -379,6 +385,10 @@ if ('serviceWorker' in navigator) {
     if (headerSyncBtn) {
       headerSyncBtn.style.display = authState.authenticated ? 'inline-flex' : 'none';
       headerSyncBtn.disabled = !authState.authenticated || authState.syncing || authState.busy;
+    }
+    if (headerPullCloudBtn) {
+      headerPullCloudBtn.style.display = authState.authenticated ? 'inline-flex' : 'none';
+      headerPullCloudBtn.disabled = !authState.authenticated || authState.syncing || authState.busy;
     }
     if (headerLogoutBtn) {
       headerLogoutBtn.style.display = authState.authenticated ? 'inline-flex' : 'none';
@@ -980,10 +990,11 @@ if ('serviceWorker' in navigator) {
     source.addEventListener('hello', () => {
       authState.liveSyncConnected = true;
       updateAuthUI();
+      loadLatestCloudState('live-connect').catch(() => {});
     });
 
     source.addEventListener('cloud-save-updated', () => {
-      autoSyncWithCloud('event').catch(() => {});
+      loadLatestCloudState('event').catch(() => {});
     });
 
     source.onerror = () => {
@@ -1047,6 +1058,8 @@ if ('serviceWorker' in navigator) {
       setSyncMessage('Cloud sync unavailable');
       updateAuthUI();
       maybeShowAuthPrompt();
+    } finally {
+      finishStartupSync();
     }
   }
 
@@ -1175,12 +1188,19 @@ if ('serviceWorker' in navigator) {
   function setupSyncEventHooks() {
     window.addEventListener('online', () => {
       if (authState.authenticated) {
+        loadLatestCloudState('online').catch(() => {});
         autoSyncWithCloud('online').catch(() => {});
       }
     });
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && authState.authenticated) {
+        loadLatestCloudState('resume').catch(() => {});
         autoSyncWithCloud('resume').catch(() => {});
+      }
+    });
+    window.addEventListener('pageshow', () => {
+      if (authState.authenticated) {
+        loadLatestCloudState('pageshow').catch(() => {});
       }
     });
     window.setInterval(() => {
