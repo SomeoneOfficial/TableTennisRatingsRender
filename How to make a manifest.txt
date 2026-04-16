@@ -1,0 +1,24 @@
+
+First add this to index.html
+
+<!-- PWA Manifest -->
+  <link rel="manifest" href="manifest.json">
+
+  
+<!-- Apple-specific meta tags -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="icon-192x192.png" href="icon-192x192.png">
+<meta name="TableTennisRatings" content="TableTennisRatings">
+
+
+also add this under <scripts> in index.html
+
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js')
+    .then(reg => console.log("Service Worker registered!", reg))
+    .catch(err => console.error("Service Worker error:", err));
+}
+
+
