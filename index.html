@@ -697,13 +697,57 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
   border-radius:10px;border:1px solid var(--border);
 }
 .challenge-vs-text{font-family:'Bebas Neue',sans-serif;font-size:2rem;color:var(--accent2);}
+
+/* ACCOUNT + SYNC */
+.auth-banner{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin-bottom:18px;padding:14px 16px;border-radius:12px;
+  background:linear-gradient(135deg,rgba(240,192,64,.12),rgba(90,180,240,.08));
+  border:1px solid rgba(240,192,64,.22);flex-wrap:wrap;
+}
+.auth-banner-title{
+  font-family:'Barlow Condensed',sans-serif;font-size:1rem;font-weight:800;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+}
+.auth-banner-sub{
+  margin-top:4px;font-size:.82rem;color:var(--text);max-width:760px;
+}
+.auth-banner-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.auth-status-pill{
+  display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;
+  border:1px solid rgba(90,180,240,.3);background:rgba(7,7,13,.45);
+  color:var(--accent3);font-size:.74rem;font-weight:800;
+  letter-spacing:.08em;text-transform:uppercase;
+}
+.auth-form-stack{display:grid;gap:10px;margin-top:12px;}
+.auth-field{
+  width:100%;background:var(--bg);border:1px solid var(--border);
+  border-radius:8px;color:var(--text);padding:10px 12px;
+  font-family:'DM Sans',sans-serif;font-size:.9rem;
+}
+.auth-field:focus{outline:none;border-color:var(--accent);}
+.auth-btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;}
+.auth-note{margin-top:10px;font-size:.78rem;color:var(--muted);}
+.auth-error{margin-top:10px;font-size:.8rem;color:#ffb4b4;min-height:1.2em;}
+.auth-stats{display:grid;gap:8px;margin-top:12px;}
+.auth-stat-row{
+  display:flex;justify-content:space-between;gap:12px;align-items:center;
+  padding:9px 10px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);
+  font-size:.82rem;
+}
+.auth-stat-row span{color:var(--muted);}
+.auth-stat-row strong{color:var(--text);text-align:right;}
+.auth-signed-in-card{
+  margin-top:12px;padding:12px;border-radius:10px;
+  background:var(--surface2);border:1px solid var(--border);
+}
 </style>
 </head>
 <body>
 <div class="app">
 <header>
   <div>
-    <div class="logo">Rank<span>Master</span><span class="ver-chip">v2.1.0</span></div>
+    <div class="logo">Rank<span>Master</span><span class="ver-chip">v2.2.0</span></div>
     <small style="font-family:'Barlow Condensed',sans-serif;font-size:.72rem;color:var(--muted);letter-spacing:.18em;text-transform:uppercase">Pro Edition  Track Any Game</small>
   </div>
   <div class="header-actions">
@@ -712,6 +756,18 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
     <button class="btn btn-secondary btn-sm" onclick="switchTab('settings')">⚙️ Settings</button>
   </div>
 </header>
+
+<div class="auth-banner">
+  <div>
+    <div class="auth-banner-title" id="auth-banner-title">Local mode is active</div>
+    <div class="auth-banner-sub" id="auth-banner-sub">Your data still saves in this browser. Sign in once on this device to keep the same account synced through the database on Render.</div>
+  </div>
+  <div class="auth-banner-actions">
+    <div class="auth-status-pill" id="auth-status-pill">Local Save</div>
+    <button class="btn btn-secondary btn-sm" id="header-sync-btn" onclick="syncNow()" style="display:none">☁ Sync Now</button>
+    <button class="btn btn-secondary btn-sm" id="header-logout-btn" onclick="logoutAccount()" style="display:none">Log Out</button>
+  </div>
+</div>
 
 <div class="tabs-wrap">
 <div class="tabs">
@@ -1097,6 +1153,46 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
     </div>
 
     <div id="settings-pane-data" class="settings-pane">
+      <div class="settings-section">
+        <h2>☁ Account & Sync</h2>
+        <div class="settings-grid">
+          <div class="settings-action">
+            <div class="sa-title">Email Login</div>
+            <div class="sa-desc">Create an account or sign in with email and password. The app keeps you signed in on this device so you do not need to keep logging in.</div>
+            <div id="auth-signed-out">
+              <div class="auth-form-stack">
+                <input class="auth-field" type="email" id="auth-email" placeholder="Email address" autocomplete="email">
+                <input class="auth-field" type="password" id="auth-password" placeholder="Password (8+ characters)" autocomplete="current-password">
+              </div>
+              <div class="auth-btn-row">
+                <button class="btn btn-primary btn-sm" id="auth-login-btn" onclick="loginAccount()">Log In</button>
+                <button class="btn btn-secondary btn-sm" id="auth-register-btn" onclick="registerAccount()">Create Account</button>
+              </div>
+            </div>
+            <div id="auth-signed-in" class="auth-signed-in-card" style="display:none">
+              <div style="font-size:.76rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.08em">Signed In As</div>
+              <div id="signed-in-email" style="font-size:1rem;font-weight:700;color:var(--accent);margin-top:4px">Not signed in</div>
+              <div class="auth-note">A long-lived session cookie keeps this browser signed in between visits unless you log out.</div>
+            </div>
+            <div class="auth-error" id="auth-error"></div>
+          </div>
+          <div class="settings-action">
+            <div class="sa-title">Cloud Sync Status</div>
+            <div class="sa-desc">Local storage stays enabled for fast/offline-ish saves. When signed in, the app checks whether the database has a newer version and syncs the latest state for this account.</div>
+            <div class="auth-stats">
+              <div class="auth-stat-row"><span>Status</span><strong id="sync-status-text">Local-only mode</strong></div>
+              <div class="auth-stat-row"><span>Cloud Version</span><strong id="sync-version-text">Local only</strong></div>
+              <div class="auth-stat-row"><span>Last Cloud Update</span><strong id="sync-updated-text">Not synced yet</strong></div>
+              <div class="auth-stat-row"><span>This Device</span><strong id="sync-device-text">Unknown</strong></div>
+              <div class="auth-stat-row"><span>Save Mode</span><strong id="cloud-mode-text">Local storage only</strong></div>
+            </div>
+            <div class="auth-btn-row" style="margin-top:12px">
+              <button class="btn btn-secondary btn-sm" id="sync-now-btn" onclick="syncNow()" disabled>☁ Sync Now</button>
+              <button class="btn btn-secondary btn-sm" id="logout-btn" onclick="logoutAccount()" style="display:none">Log Out</button>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="settings-section">
         <h2>📋 Data</h2>
         <div class="settings-grid">
@@ -3657,6 +3753,7 @@ function formatTime(d){return d.toLocaleDateString('en-US',{month:'short',day:'n
 // ===================== BOOT =====================
 init();
 </script>
+<script src="/script.js"></script>
 </body>
 </html>
 
