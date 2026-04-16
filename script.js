@@ -27,6 +27,8 @@ if ('serviceWorker' in navigator) {
   };
   const CLOUD_POLL_MS = 15000;
   const LIVE_SYNC_RETRY_MS = 3000;
+  const FETCH_TIMEOUT_MS = 10000;
+  const STARTUP_SYNC_MAX_MS = 12000;
 
   let syncTimer = null;
   let lastDataSnapshot = '';
@@ -34,6 +36,7 @@ if ('serviceWorker' in navigator) {
   let originalSaveState = null;
   let liveSyncSource = null;
   let liveSyncReconnectTimer = null;
+  let startupSyncFallbackTimer = null;
 
   function getDeviceId() {
     let current = localStorage.getItem(DEVICE_ID_KEY);
@@ -210,6 +213,10 @@ if ('serviceWorker' in navigator) {
   }
 
   function finishStartupSync() {
+    if (startupSyncFallbackTimer) {
+      window.clearTimeout(startupSyncFallbackTimer);
+      startupSyncFallbackTimer = null;
+    }
     document.documentElement.classList.remove('cloud-sync-pending');
   }
 
@@ -248,15 +255,34 @@ if ('serviceWorker' in navigator) {
   }
 
   async function fetchJson(url, options = {}) {
-    const response = await fetch(url, {
-      credentials: 'same-origin',
-      cache: 'no-store',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options.headers || {})
-      },
-      ...options
-    });
+    const controller = new AbortController();
+    const timeoutMs =
+      typeof options.timeoutMs === 'number' && Number.isFinite(options.timeoutMs)
+        ? options.timeoutMs
+        : FETCH_TIMEOUT_MS;
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    let response;
+    try {
+      response = await fetch(url, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(options.headers || {})
+        },
+        ...options
+      });
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        const err = new Error('Network request timed out.');
+        err.status = 408;
+        throw err;
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
     let payload = null;
     try {
       payload = await response.json();
@@ -1214,6 +1240,10 @@ if ('serviceWorker' in navigator) {
     ensureSyncMeta();
     wrapSaveState();
     syncAuthFieldValues(getLastAccountEmail(), '');
+    startupSyncFallbackTimer = window.setTimeout(() => {
+      setSyncMessage('Cloud check took too long. Showing the app while sync keeps retrying.');
+      finishStartupSync();
+    }, STARTUP_SYNC_MAX_MS);
     ['auth-email', 'auth-modal-email', 'auth-password', 'auth-modal-password'].forEach(id => {
       const field = document.getElementById(id);
       if (!field) return;
