@@ -83,6 +83,25 @@ if ('serviceWorker' in navigator) {
     );
   }
 
+  function hasPendingLocalUpload() {
+    const meta = ensureSyncMeta();
+    if (!hasMeaningfulStateData()) return false;
+    if (authState.email && meta.accountEmail && meta.accountEmail !== authState.email) {
+      return false;
+    }
+
+    const localStamp = toMillis(meta.lastLocalChangeAt);
+    const syncedStamp = Math.max(
+      toMillis(meta.serverUpdatedAt),
+      toMillis(meta.lastSyncedAt)
+    );
+
+    if (!Number(meta.serverVersion || 0)) {
+      return localStamp > 0;
+    }
+    return localStamp > syncedStamp;
+  }
+
   function hasRemoteNewerData(remoteSave) {
     const remoteStamp = getRemoteChangeMillis(remoteSave);
     const localStamp = toMillis(state?.syncMeta?.lastLocalChangeAt);
@@ -508,12 +527,13 @@ if ('serviceWorker' in navigator) {
     }
   }
 
-  async function pushLocalState(baseVersion, reason, attempt = 0) {
+  async function pushLocalState(baseVersion, reason, attempt = 0, force = false) {
     const meta = ensureSyncMeta();
     const payload = {
       state,
       baseVersion: Number.isFinite(baseVersion) ? baseVersion : Number(meta.serverVersion || 0),
-      clientUpdatedAt: meta.lastLocalChangeAt || new Date().toISOString()
+      clientUpdatedAt: meta.lastLocalChangeAt || new Date().toISOString(),
+      force
     };
 
     try {
@@ -530,24 +550,31 @@ if ('serviceWorker' in navigator) {
         persistCurrentState();
       });
       authState.lastSyncAt = saved.updatedAt || new Date().toISOString();
-      setSyncMessage(`Cloud save updated${reason ? ` (${reason})` : ''}`);
+      setSyncMessage(`${force ? 'Cloud save overwritten' : 'Cloud save updated'}${reason ? ` (${reason})` : ''}`);
       loadCloudHistory().catch(() => {});
       return saved;
     } catch (error) {
       if (error.status === 409 && attempt < 1 && error.payload?.current) {
         const current = error.payload.current;
+        if (force) {
+          return pushLocalState(current.version, reason, attempt + 1, true);
+        }
         if (hasRemoteNewerData(current)) {
           applyRemoteState(current, 'Loaded the newer cloud save.');
           setSyncMessage('Loaded newer cloud data');
           return current;
         }
-        return pushLocalState(current.version, reason, attempt + 1);
+        return pushLocalState(current.version, reason, attempt + 1, false);
       }
       throw error;
     }
   }
 
-  async function uploadToCloud(reason = 'manual') {
+  async function uploadToCloud(reason = 'manual', options = {}) {
+    const {
+      overwriteCloud = true,
+      promptBeforeOverwrite = false
+    } = options;
     if (!authState.cloudEnabled || !authState.authenticated) {
       updateAuthUI();
       return null;
@@ -565,26 +592,18 @@ if ('serviceWorker' in navigator) {
       const remote = await fetchJson('/api/save');
       const localMeta = ensureSyncMeta();
       const remoteHasState = Boolean(remote?.save);
+      const localHasMeaningfulData = hasMeaningfulStateData();
       const accountMismatch =
         authState.email &&
         localMeta.accountEmail &&
         localMeta.accountEmail !== authState.email;
-
-      if (remoteHasState && (accountMismatch || hasRemoteNewerData(remote))) {
-        setSyncMessage('Newer cloud data exists. Use Download From Cloud in Settings if you want to bring it down.');
-        loadCloudHistory().catch(() => {});
-        if (reason === 'manual' && typeof window.showToast === 'function') {
-          window.showToast('Cloud has newer data. Download it from Settings if you want to replace this device.', 'error');
-        }
-        return remote;
-      }
 
       if (!remoteHasState) {
         if (accountMismatch) {
           setSyncMessage('Cloud account is empty. Local data belongs to a different signed-in account on this device.');
           return remote;
         }
-        if (hasMeaningfulStateData()) {
+        if (localHasMeaningfulData) {
           return await pushLocalState(0, reason);
         }
         persistStateWithoutTouch(() => {
@@ -619,17 +638,39 @@ if ('serviceWorker' in navigator) {
 
       const remoteStamp = getRemoteChangeMillis(remote);
       const localStamp = toMillis(localMeta.lastLocalChangeAt);
+      const needsOverwrite =
+        accountMismatch ||
+        remoteStamp > localStamp ||
+        (remoteStamp === localStamp && localSnapshot !== remoteSnapshot);
 
-      if (remoteStamp > localStamp) {
-        setSyncMessage('Cloud data is newer. Use Download From Cloud in Settings if you want to replace local data.');
-        loadCloudHistory().catch(() => {});
+      if (!localHasMeaningfulData) {
+        setSyncMessage('There is no local data to push right now.');
         if (reason === 'manual' && typeof window.showToast === 'function') {
-          window.showToast('Push was skipped because the cloud save is newer.', 'error');
+          window.showToast('There is no meaningful local data to upload yet.', 'error');
         }
         return remote;
       }
 
-      return await pushLocalState(remote.version, reason);
+      if (needsOverwrite && overwriteCloud) {
+        if (promptBeforeOverwrite) {
+          const overwriteMsg = accountMismatch
+            ? 'This local data belongs to a different signed-in account on this device. Overwrite the current cloud save anyway?'
+            : 'Overwrite the current cloud save with this device data?';
+          if (!window.confirm(overwriteMsg)) {
+            setSyncMessage('Cloud overwrite canceled');
+            return remote;
+          }
+        }
+        return await pushLocalState(remote.version, `${reason} overwrite`, 0, true);
+      }
+
+      if (needsOverwrite) {
+        setSyncMessage('Cloud data differs from local data. Use Push To Cloud to overwrite it or Download From Cloud to replace this device.');
+        loadCloudHistory().catch(() => {});
+        return remote;
+      }
+
+      return await pushLocalState(remote.version, reason, 0, false);
     } catch (error) {
       if (error.status === 401) {
         authState.authenticated = false;
@@ -677,7 +718,24 @@ if ('serviceWorker' in navigator) {
       const localHasMeaningfulData = hasMeaningfulStateData();
       const remoteIsOlder = getRemoteChangeMillis(remote) < toMillis(ensureSyncMeta().lastLocalChangeAt);
 
-      if (localHasMeaningfulData && localSnapshot !== remoteSnapshot) {
+      if (localSnapshot === remoteSnapshot) {
+        persistStateWithoutTouch(() => {
+          const meta = ensureSyncMeta();
+          meta.lastLocalChangeAt = getLatestIso(
+            meta.lastLocalChangeAt,
+            remote.save?.syncMeta?.lastLocalChangeAt,
+            remote.clientUpdatedAt,
+            remote.updatedAt
+          ) || meta.lastLocalChangeAt || new Date().toISOString();
+          markServerVersion(meta, remote);
+          persistCurrentState();
+        });
+        setSyncMessage('This device already has the latest cloud data');
+        await loadCloudHistory().catch(() => {});
+        return remote;
+      }
+
+      if (localHasMeaningfulData) {
         const message = remoteIsOlder
           ? 'The cloud save looks older than your local data. Download it anyway and replace this device?'
           : 'Download the cloud save and replace this device data with it?';
@@ -725,7 +783,14 @@ if ('serviceWorker' in navigator) {
       }
       updateAuthUI();
       if (authState.authenticated) {
-        await uploadToCloud('startup');
+        if (hasPendingLocalUpload()) {
+          await uploadToCloud('startup', {
+            overwriteCloud: true,
+            promptBeforeOverwrite: false
+          });
+        } else {
+          setSyncMessage('Signed in. Use Push To Cloud to overwrite the web save or Download From Cloud to update this device.');
+        }
         await loadCloudHistory().catch(() => {});
       } else {
         authState.cloudHistory = [];
@@ -777,7 +842,14 @@ if ('serviceWorker' in navigator) {
       if (typeof window.showToast === 'function') {
         window.showToast(successMessage, 'success');
       }
-      await uploadToCloud('auth');
+      if (hasPendingLocalUpload()) {
+        await uploadToCloud('auth', {
+          overwriteCloud: true,
+          promptBeforeOverwrite: false
+        });
+      } else {
+        setSyncMessage('Signed in. Use Push To Cloud to overwrite the web save or Download From Cloud to update this device.');
+      }
       await loadCloudHistory().catch(() => {});
       syncAuthFieldValues(authState.email, '');
     } catch (error) {
