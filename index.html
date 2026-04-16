@@ -759,24 +759,14 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
     <small style="font-family:'Barlow Condensed',sans-serif;font-size:.72rem;color:var(--muted);letter-spacing:.18em;text-transform:uppercase">Pro Edition  Track Any Game</small>
   </div>
   <div class="header-actions">
+    <button class="btn btn-primary btn-sm" id="header-login-btn" onclick="openAuthPrompt()" style="display:none">Log In</button>
+    <button class="btn btn-secondary btn-sm" id="header-sync-btn" onclick="syncNow()" style="display:none">☁ Sync Now</button>
+    <button class="btn btn-secondary btn-sm" id="header-logout-btn" onclick="logoutAccount()" style="display:none">Log Out</button>
     <button class="btn btn-secondary btn-sm" onclick="downloadJSON()">⬇ Export</button>
     <label class="btn btn-secondary btn-sm" style="cursor:pointer">⬆ Import<input type="file" accept=".json" onchange="importJSON(event)" style="display:none"></label>
     <button class="btn btn-secondary btn-sm" onclick="switchTab('settings')">⚙️ Settings</button>
   </div>
 </header>
-
-<div class="auth-banner">
-  <div>
-    <div class="auth-banner-title" id="auth-banner-title">Local mode is active</div>
-    <div class="auth-banner-sub" id="auth-banner-sub">Your data still saves in this browser. Sign in once on this device to keep the same account synced through the database on Render.</div>
-  </div>
-  <div class="auth-banner-actions">
-    <div class="auth-status-pill" id="auth-status-pill">Local Save</div>
-    <button class="btn btn-primary btn-sm" id="header-login-btn" onclick="openAuthPrompt()" style="display:none">Log In</button>
-    <button class="btn btn-secondary btn-sm" id="header-sync-btn" onclick="syncNow()" style="display:none">☁ Sync Now</button>
-    <button class="btn btn-secondary btn-sm" id="header-logout-btn" onclick="logoutAccount()" style="display:none">Log Out</button>
-  </div>
-</div>
 
 <div class="tabs-wrap">
 <div class="tabs">

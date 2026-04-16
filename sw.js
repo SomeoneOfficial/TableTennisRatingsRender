@@ -1,4 +1,4 @@
-const CACHE_NAME = 'TableTennisRatings-v2';
+const CACHE_NAME = 'TableTennisRatings-v3';
 const urlsToCache = [
   './',
   './index.html',
