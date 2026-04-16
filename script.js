@@ -413,8 +413,8 @@ if ('serviceWorker' in navigator) {
       headerSyncBtn.disabled = !authState.authenticated || authState.syncing || authState.busy;
     }
     if (headerPullCloudBtn) {
-      headerPullCloudBtn.style.display = authState.authenticated ? 'inline-flex' : 'none';
-      headerPullCloudBtn.disabled = !authState.authenticated || authState.syncing || authState.busy;
+      headerPullCloudBtn.style.display = 'inline-flex';
+      headerPullCloudBtn.disabled = authState.syncing || authState.busy;
     }
     if (headerLogoutBtn) {
       headerLogoutBtn.style.display = authState.authenticated ? 'inline-flex' : 'none';
@@ -744,7 +744,20 @@ if ('serviceWorker' in navigator) {
   }
 
   async function downloadFromCloud(reason = 'manual') {
-    if (!authState.cloudEnabled || !authState.authenticated) {
+    if (!authState.cloudEnabled) {
+      setSyncMessage('Cloud sync is not configured on this deployment yet.');
+      if (reason === 'manual' && typeof window.showToast === 'function') {
+        window.showToast('Cloud sync is not configured on this deployment yet.', 'error');
+      }
+      updateAuthUI();
+      return null;
+    }
+    if (!authState.authenticated) {
+      openAuthPrompt();
+      setSyncMessage('Sign in to download cloud data.');
+      if (reason === 'manual' && typeof window.showToast === 'function') {
+        window.showToast('Sign in to download cloud data.', 'error');
+      }
       updateAuthUI();
       return null;
     }
