@@ -16,6 +16,7 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 180;
 const MAX_SAVE_BYTES = 2 * 1024 * 1024;
 const SAVE_HISTORY_LIMIT = 10;
 const CLOUD_ENABLED = Boolean(DATABASE_URL);
+const liveSyncClients = new Map();
 
 const pool = CLOUD_ENABLED
   ? new Pool({
@@ -121,6 +122,35 @@ function formatHistoryRow(row, includeSave = false) {
     clientUpdatedAt: asIso(row.client_updated_at),
     ...(includeSave ? { save: row.data } : {})
   };
+}
+
+function registerLiveSyncClient(userId, res) {
+  const key = String(userId);
+  const entry = liveSyncClients.get(key) || new Set();
+  entry.add(res);
+  liveSyncClients.set(key, entry);
+}
+
+function unregisterLiveSyncClient(userId, res) {
+  const key = String(userId);
+  const entry = liveSyncClients.get(key);
+  if (!entry) return;
+  entry.delete(res);
+  if (!entry.size) liveSyncClients.delete(key);
+}
+
+function broadcastLiveSync(userId, payload) {
+  const key = String(userId);
+  const entry = liveSyncClients.get(key);
+  if (!entry || !entry.size) return;
+  const data = `event: cloud-save-updated\ndata: ${JSON.stringify(payload)}\n\n`;
+  entry.forEach(res => {
+    try {
+      res.write(data);
+    } catch (_) {
+      unregisterLiveSyncClient(userId, res);
+    }
+  });
 }
 
 async function insertHistorySnapshot(client, snapshot) {
@@ -354,6 +384,32 @@ app.get('/api/auth/session', async (req, res, next) => {
   }
 });
 
+app.get('/api/events', requireAuth, (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-store',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+
+  registerLiveSyncClient(req.user.id, res);
+  res.write(`event: hello\ndata: ${JSON.stringify({ ok: true, userId: req.user.id })}\n\n`);
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(`event: ping\ndata: ${JSON.stringify({ now: new Date().toISOString() })}\n\n`);
+    } catch (_) {
+      clearInterval(heartbeat);
+      unregisterLiveSyncClient(req.user.id, res);
+    }
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unregisterLiveSyncClient(req.user.id, res);
+  });
+});
+
 app.post('/api/auth/register', async (req, res, next) => {
   if (!pool) {
     return res.status(503).json({
@@ -544,6 +600,7 @@ app.put('/api/save', requireAuth, async (req, res, next) => {
       });
       await pruneHistorySnapshots(client, req.user.id);
       await client.query('COMMIT');
+      broadcastLiveSync(req.user.id, formatSaveRow(inserted.rows[0]));
       return res.json(formatSaveRow(inserted.rows[0]));
     }
 
@@ -587,6 +644,7 @@ app.put('/api/save', requireAuth, async (req, res, next) => {
     });
     await pruneHistorySnapshots(client, req.user.id);
     await client.query('COMMIT');
+    broadcastLiveSync(req.user.id, formatSaveRow(updated.rows[0]));
     res.json(formatSaveRow(updated.rows[0]));
   } catch (error) {
     try {
@@ -675,6 +733,8 @@ app.post('/api/save/restore', requireAuth, async (req, res, next) => {
     });
     await pruneHistorySnapshots(client, req.user.id);
     await client.query('COMMIT');
+
+    broadcastLiveSync(req.user.id, formatSaveRow(restored.rows[0]));
 
     res.json({
       restoredFrom: formatHistoryRow(selected),

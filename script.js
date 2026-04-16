@@ -22,14 +22,18 @@ if ('serviceWorker' in navigator) {
     lastSyncAt: null,
     cloudHistory: [],
     cloudHistoryLoading: false,
-    cloudHistoryError: ''
+    cloudHistoryError: '',
+    liveSyncConnected: false
   };
   const CLOUD_POLL_MS = 15000;
+  const LIVE_SYNC_RETRY_MS = 3000;
 
   let syncTimer = null;
   let lastDataSnapshot = '';
   let suppressLocalTouch = 0;
   let originalSaveState = null;
+  let liveSyncSource = null;
+  let liveSyncReconnectTimer = null;
 
   function getDeviceId() {
     let current = localStorage.getItem(DEVICE_ID_KEY);
@@ -411,7 +415,9 @@ if ('serviceWorker' in navigator) {
     }
     if (cloudMode) {
       cloudMode.textContent = authState.authenticated
-        ? 'Local storage + account sync'
+        ? authState.liveSyncConnected
+          ? 'Local storage + live cloud sync'
+          : 'Local storage + cloud sync'
         : authState.cloudEnabled
           ? 'Local storage only until sign-in'
           : 'Login server not ready';
@@ -682,6 +688,7 @@ if ('serviceWorker' in navigator) {
         authState.email = '';
         authState.cloudHistory = [];
         authState.cloudHistoryError = '';
+        closeLiveSync();
         setSyncMessage('Sign in again to sync');
       } else {
         setSyncMessage(error.message || 'Cloud sync failed');
@@ -754,6 +761,13 @@ if ('serviceWorker' in navigator) {
       await loadCloudHistory().catch(() => {});
       return remote;
     } catch (error) {
+      if (error.status === 401) {
+        authState.authenticated = false;
+        authState.email = '';
+        authState.cloudHistory = [];
+        authState.cloudHistoryError = '';
+        closeLiveSync();
+      }
       setSyncMessage(error.message || 'Could not download the cloud save.');
       if (reason === 'manual' && typeof window.showToast === 'function') {
         window.showToast(error.message || 'Could not download the cloud save.', 'error');
@@ -761,6 +775,61 @@ if ('serviceWorker' in navigator) {
       throw error;
     } finally {
       setAuthBusy(false);
+    }
+  }
+
+  async function loadLatestCloudState(reason = 'startup') {
+    if (!authState.cloudEnabled || !authState.authenticated) {
+      updateAuthUI();
+      return null;
+    }
+
+    try {
+      const remote = await fetchJson('/api/save');
+      if (!remote?.save) {
+        setSyncMessage('No cloud save yet. Keeping this device data as-is.');
+        await loadCloudHistory().catch(() => {});
+        return null;
+      }
+
+      const localSnapshot = getComparableSnapshot();
+      const remoteSnapshot = getComparableSnapshot(remote.save);
+      if (localSnapshot === remoteSnapshot) {
+        persistStateWithoutTouch(() => {
+          const meta = ensureSyncMeta();
+          meta.lastLocalChangeAt = getLatestIso(
+            meta.lastLocalChangeAt,
+            remote.save?.syncMeta?.lastLocalChangeAt,
+            remote.clientUpdatedAt,
+            remote.updatedAt
+          ) || meta.lastLocalChangeAt || new Date().toISOString();
+          markServerVersion(meta, remote);
+          persistCurrentState();
+        });
+        setSyncMessage('Loaded latest cloud status');
+        await loadCloudHistory().catch(() => {});
+        return remote;
+      }
+
+      applyRemoteState(remote, reason === 'manual' ? 'Downloaded the latest cloud data.' : null);
+      setSyncMessage('Loaded newest cloud data from the cloud');
+      await loadCloudHistory().catch(() => {});
+      return remote;
+    } catch (error) {
+      if (error.status === 401) {
+        authState.authenticated = false;
+        authState.email = '';
+        authState.cloudHistory = [];
+        authState.cloudHistoryError = '';
+        authState.liveSyncConnected = false;
+        closeLiveSync();
+        setSyncMessage('Sign in again to sync');
+        updateAuthUI();
+        return null;
+      }
+      setSyncMessage(error.message || 'Could not load latest cloud data');
+      updateAuthUI();
+      return null;
     }
   }
 
@@ -859,6 +928,7 @@ if ('serviceWorker' in navigator) {
         authState.email = '';
         authState.cloudHistory = [];
         authState.cloudHistoryError = '';
+        closeLiveSync();
         setSyncMessage('Sign in again to sync');
         updateAuthUI();
         return null;
@@ -867,6 +937,69 @@ if ('serviceWorker' in navigator) {
       updateAuthUI();
       return null;
     }
+  }
+
+  function closeLiveSync() {
+    if (liveSyncReconnectTimer) {
+      window.clearTimeout(liveSyncReconnectTimer);
+      liveSyncReconnectTimer = null;
+    }
+    if (liveSyncSource) {
+      liveSyncSource.close();
+      liveSyncSource = null;
+    }
+    if (authState.liveSyncConnected) {
+      authState.liveSyncConnected = false;
+      updateAuthUI();
+    }
+  }
+
+  function connectLiveSync() {
+    if (
+      !authState.cloudEnabled ||
+      !authState.authenticated ||
+      typeof EventSource === 'undefined' ||
+      liveSyncSource
+    ) {
+      return;
+    }
+
+    if (liveSyncReconnectTimer) {
+      window.clearTimeout(liveSyncReconnectTimer);
+      liveSyncReconnectTimer = null;
+    }
+
+    const source = new EventSource('/api/events');
+    liveSyncSource = source;
+
+    source.onopen = () => {
+      authState.liveSyncConnected = true;
+      updateAuthUI();
+    };
+
+    source.addEventListener('hello', () => {
+      authState.liveSyncConnected = true;
+      updateAuthUI();
+    });
+
+    source.addEventListener('cloud-save-updated', () => {
+      autoSyncWithCloud('event').catch(() => {});
+    });
+
+    source.onerror = () => {
+      if (liveSyncSource === source) {
+        source.close();
+        liveSyncSource = null;
+      }
+      authState.liveSyncConnected = false;
+      updateAuthUI();
+      if (authState.authenticated && !liveSyncReconnectTimer) {
+        liveSyncReconnectTimer = window.setTimeout(() => {
+          liveSyncReconnectTimer = null;
+          connectLiveSync();
+        }, LIVE_SYNC_RETRY_MS);
+      }
+    };
   }
 
   function scheduleSync(reason = 'auto') {
@@ -893,10 +1026,12 @@ if ('serviceWorker' in navigator) {
       }
       updateAuthUI();
       if (authState.authenticated) {
-        await autoSyncWithCloud('startup');
+        await loadLatestCloudState('startup');
+        connectLiveSync();
       } else {
         authState.cloudHistory = [];
         authState.cloudHistoryError = '';
+        closeLiveSync();
         setSyncMessage(authState.cloudEnabled ? 'Local-only mode' : 'Cloud sync unavailable');
       }
       maybeShowAuthPrompt();
@@ -907,6 +1042,7 @@ if ('serviceWorker' in navigator) {
       authState.email = '';
       authState.cloudHistory = [];
       authState.cloudHistoryError = '';
+      closeLiveSync();
       syncAuthFieldValues(getLastAccountEmail(), '');
       setSyncMessage('Cloud sync unavailable');
       updateAuthUI();
@@ -944,7 +1080,8 @@ if ('serviceWorker' in navigator) {
       if (typeof window.showToast === 'function') {
         window.showToast(successMessage, 'success');
       }
-      await autoSyncWithCloud('auth');
+      await loadLatestCloudState('auth');
+      connectLiveSync();
       syncAuthFieldValues(authState.email, '');
     } catch (error) {
       setAuthFormError(error.message || 'Could not sign in.');
@@ -964,6 +1101,7 @@ if ('serviceWorker' in navigator) {
       authState.email = '';
       authState.cloudHistory = [];
       authState.cloudHistoryError = '';
+      closeLiveSync();
       syncAuthFieldValues(getLastAccountEmail(), '');
       setSyncMessage('Signed out. Local save is still available.');
       updateAuthUI();
