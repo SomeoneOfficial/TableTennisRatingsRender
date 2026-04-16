@@ -24,6 +24,7 @@ if ('serviceWorker' in navigator) {
     cloudHistoryLoading: false,
     cloudHistoryError: ''
   };
+  const CLOUD_POLL_MS = 15000;
 
   let syncTimer = null;
   let lastDataSnapshot = '';
@@ -81,6 +82,10 @@ if ('serviceWorker' in navigator) {
       toMillis(remotePayload?.clientUpdatedAt),
       toMillis(remotePayload?.updatedAt)
     );
+  }
+
+  function getLocalChangeMillis() {
+    return toMillis(ensureSyncMeta().lastLocalChangeAt);
   }
 
   function hasPendingLocalUpload() {
@@ -451,7 +456,7 @@ if ('serviceWorker' in navigator) {
       return;
     }
     if (!authState.cloudHistory.length) {
-      statusNode.textContent = 'No cloud history yet. The first three signed-in saves will build your rollback list.';
+      statusNode.textContent = 'No cloud history yet. The first ten signed-in saves will build your rollback list.';
       listNode.innerHTML = '<div class="cloud-history-empty">No cloud versions have been stored yet.</div>';
       return;
     }
@@ -781,10 +786,7 @@ if ('serviceWorker' in navigator) {
 
       if (!remoteHasState) {
         if (pendingLocalUpload) {
-          return await uploadToCloud(`${reason} upload`, {
-            overwriteCloud: true,
-            promptBeforeOverwrite: false
-          });
+          return await pushLocalState(0, `${reason} upload`, 0, false);
         }
         setSyncMessage(localHasMeaningfulData ? 'No cloud save yet. Local changes will upload automatically.' : 'Cloud account is ready.');
         await loadCloudHistory().catch(() => {});
@@ -818,17 +820,19 @@ if ('serviceWorker' in navigator) {
         return remote;
       }
 
-      if (pendingLocalUpload) {
-        return await uploadToCloud(`${reason} upload`, {
-          overwriteCloud: true,
-          promptBeforeOverwrite: false
-        });
-      }
-
+      const remoteStamp = getRemoteChangeMillis(remote);
+      const localStamp = getLocalChangeMillis();
+      const remoteVersion = Number(remote.version || 0);
+      const localVersion = Number(localMeta.serverVersion || 0);
       const remoteIsNewer =
         !localHasMeaningfulData ||
-        hasRemoteNewerData(remote) ||
-        getRemoteChangeMillis(remote) > toMillis(localMeta.lastLocalChangeAt);
+        remoteStamp > localStamp ||
+        (remoteStamp === localStamp && remoteVersion > localVersion);
+      const localIsNewer =
+        localHasMeaningfulData &&
+        pendingLocalUpload &&
+        (localStamp > remoteStamp ||
+          (localStamp === remoteStamp && localVersion >= remoteVersion));
 
       if (remoteIsNewer) {
         applyRemoteState(remote, null);
@@ -837,7 +841,16 @@ if ('serviceWorker' in navigator) {
         return remote;
       }
 
-      setSyncMessage('Local data is current on this device');
+      if (localIsNewer) {
+        return await pushLocalState(remote.version, `${reason} upload`, 0, false);
+      }
+
+      if (pendingLocalUpload) {
+        return await pushLocalState(remote.version, `${reason} upload`, 0, false);
+      }
+
+      applyRemoteState(remote, null);
+      setSyncMessage('Downloaded cloud data automatically');
       await loadCloudHistory().catch(() => {});
       return remote;
     } catch (error) {
@@ -1036,7 +1049,7 @@ if ('serviceWorker' in navigator) {
       if (authState.authenticated && !document.hidden) {
         autoSyncWithCloud('interval').catch(() => {});
       }
-    }, 60000);
+    }, CLOUD_POLL_MS);
   }
 
   function initCloudSync() {
