@@ -14,6 +14,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'dev-session-secret';
 const SESSION_COOKIE = 'rankmaster_session';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 180;
 const MAX_SAVE_BYTES = 2 * 1024 * 1024;
+const SAVE_HISTORY_LIMIT = 10;
 const CLOUD_ENABLED = Boolean(DATABASE_URL);
 
 const pool = CLOUD_ENABLED
@@ -160,10 +161,10 @@ async function pruneHistorySnapshots(client, userId) {
           FROM user_save_history
           WHERE user_id = $1
           ORDER BY save_version DESC, id DESC
-          LIMIT 3
+          LIMIT $2
         )
     `,
-    [userId]
+    [userId, SAVE_HISTORY_LIMIT]
   );
 }
 
@@ -480,9 +481,9 @@ app.get('/api/save/history', requireAuth, async (req, res, next) => {
         FROM user_save_history
         WHERE user_id = $1
         ORDER BY save_version DESC, id DESC
-        LIMIT 3
+        LIMIT $2
       `,
-      [req.user.id]
+      [req.user.id, SAVE_HISTORY_LIMIT]
     );
     res.json({
       history: result.rows.map(row => formatHistoryRow(row))

@@ -1195,7 +1195,7 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
           </div>
           <div class="settings-action">
             <div class="sa-title">Cloud Sync Status</div>
-            <div class="sa-desc">Push uploads this device to the cloud and can overwrite the current cloud save. Download checks the latest cloud data and pulls it onto this device when you ask for it.</div>
+            <div class="sa-desc">Local changes upload automatically. If the cloud save is newer, the app downloads it automatically. Push still forces this device up to the cloud, and Download From Cloud manually re-checks the latest web data.</div>
             <div class="auth-stats">
               <div class="auth-stat-row"><span>Status</span><strong id="sync-status-text">Local-only mode</strong></div>
               <div class="auth-stat-row"><span>Cloud Version</span><strong id="sync-version-text">Local only</strong></div>
@@ -1212,7 +1212,7 @@ body.feature-party .card-lg,body.feature-party .settings-section{box-shadow:0 0 
         </div>
         <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:16px;">
           <h3>Cloud Rollback</h3>
-          <div class="auth-note">The last three cloud saves are kept online so you can restore a recent version if something goes wrong.</div>
+          <div class="auth-note">The last ten cloud saves are kept online so you can restore a recent version if something goes wrong.</div>
           <div class="auth-btn-row" style="margin-top:12px">
             <button class="btn btn-secondary btn-sm" id="cloud-history-refresh-btn" onclick="refreshCloudHistory()">Refresh History</button>
           </div>

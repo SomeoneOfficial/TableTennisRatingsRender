@@ -456,7 +456,7 @@ if ('serviceWorker' in navigator) {
       return;
     }
 
-    statusNode.textContent = 'The newest three cloud versions are available below.';
+    statusNode.textContent = 'The newest ten cloud versions are available below.';
     listNode.innerHTML = authState.cloudHistory.map(item => {
       const isCurrent = Number(item.version || 0) === currentVersion;
       const when = item.updatedAt
@@ -759,6 +759,103 @@ if ('serviceWorker' in navigator) {
     }
   }
 
+  async function autoSyncWithCloud(reason = 'auto') {
+    if (!authState.cloudEnabled || !authState.authenticated) {
+      updateAuthUI();
+      return null;
+    }
+    if (authState.syncing || authState.busy) {
+      return null;
+    }
+
+    try {
+      const remote = await fetchJson('/api/save');
+      const localMeta = ensureSyncMeta();
+      const remoteHasState = Boolean(remote?.save);
+      const localHasMeaningfulData = hasMeaningfulStateData();
+      const pendingLocalUpload = hasPendingLocalUpload();
+      const accountMismatch =
+        authState.email &&
+        localMeta.accountEmail &&
+        localMeta.accountEmail !== authState.email;
+
+      if (!remoteHasState) {
+        if (pendingLocalUpload) {
+          return await uploadToCloud(`${reason} upload`, {
+            overwriteCloud: true,
+            promptBeforeOverwrite: false
+          });
+        }
+        setSyncMessage(localHasMeaningfulData ? 'No cloud save yet. Local changes will upload automatically.' : 'Cloud account is ready.');
+        await loadCloudHistory().catch(() => {});
+        return null;
+      }
+
+      const localSnapshot = getComparableSnapshot();
+      const remoteSnapshot = getComparableSnapshot(remote.save);
+
+      if (accountMismatch) {
+        applyRemoteState(remote, null);
+        setSyncMessage('Downloaded cloud data automatically for the signed-in account');
+        await loadCloudHistory().catch(() => {});
+        return remote;
+      }
+
+      if (localSnapshot === remoteSnapshot) {
+        persistStateWithoutTouch(() => {
+          const meta = ensureSyncMeta();
+          meta.lastLocalChangeAt = getLatestIso(
+            meta.lastLocalChangeAt,
+            remote.save?.syncMeta?.lastLocalChangeAt,
+            remote.clientUpdatedAt,
+            remote.updatedAt
+          ) || meta.lastLocalChangeAt || new Date().toISOString();
+          markServerVersion(meta, remote);
+          persistCurrentState();
+        });
+        setSyncMessage('This device already has the latest cloud data');
+        await loadCloudHistory().catch(() => {});
+        return remote;
+      }
+
+      if (pendingLocalUpload) {
+        return await uploadToCloud(`${reason} upload`, {
+          overwriteCloud: true,
+          promptBeforeOverwrite: false
+        });
+      }
+
+      const remoteIsNewer =
+        !localHasMeaningfulData ||
+        hasRemoteNewerData(remote) ||
+        getRemoteChangeMillis(remote) > toMillis(localMeta.lastLocalChangeAt);
+
+      if (remoteIsNewer) {
+        applyRemoteState(remote, null);
+        setSyncMessage('Downloaded newer cloud data automatically');
+        await loadCloudHistory().catch(() => {});
+        return remote;
+      }
+
+      setSyncMessage('Local data is current on this device');
+      await loadCloudHistory().catch(() => {});
+      return remote;
+    } catch (error) {
+      if (error.status === 401) {
+        authState.authenticated = false;
+        authState.email = '';
+        authState.cloudHistory = [];
+        authState.cloudHistoryError = '';
+        setSyncMessage('Sign in again to sync');
+        updateAuthUI();
+        return null;
+      }
+      setSyncMessage(error.message || 'Automatic cloud sync failed');
+      updateAuthUI();
+      return null;
+    }
+  }
+
   function scheduleSync(reason = 'auto') {
     if (!authState.cloudEnabled || !authState.authenticated) return;
     clearTimeout(syncTimer);
@@ -783,15 +880,7 @@ if ('serviceWorker' in navigator) {
       }
       updateAuthUI();
       if (authState.authenticated) {
-        if (hasPendingLocalUpload()) {
-          await uploadToCloud('startup', {
-            overwriteCloud: true,
-            promptBeforeOverwrite: false
-          });
-        } else {
-          setSyncMessage('Signed in. Use Push To Cloud to overwrite the web save or Download From Cloud to update this device.');
-        }
-        await loadCloudHistory().catch(() => {});
+        await autoSyncWithCloud('startup');
       } else {
         authState.cloudHistory = [];
         authState.cloudHistoryError = '';
@@ -842,15 +931,7 @@ if ('serviceWorker' in navigator) {
       if (typeof window.showToast === 'function') {
         window.showToast(successMessage, 'success');
       }
-      if (hasPendingLocalUpload()) {
-        await uploadToCloud('auth', {
-          overwriteCloud: true,
-          promptBeforeOverwrite: false
-        });
-      } else {
-        setSyncMessage('Signed in. Use Push To Cloud to overwrite the web save or Download From Cloud to update this device.');
-      }
-      await loadCloudHistory().catch(() => {});
+      await autoSyncWithCloud('auth');
       syncAuthFieldValues(authState.email, '');
     } catch (error) {
       setAuthFormError(error.message || 'Could not sign in.');
@@ -943,17 +1024,17 @@ if ('serviceWorker' in navigator) {
   function setupSyncEventHooks() {
     window.addEventListener('online', () => {
       if (authState.authenticated) {
-        uploadToCloud('online').catch(() => {});
+        autoSyncWithCloud('online').catch(() => {});
       }
     });
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && authState.authenticated) {
-        uploadToCloud('resume').catch(() => {});
+        autoSyncWithCloud('resume').catch(() => {});
       }
     });
     window.setInterval(() => {
       if (authState.authenticated && !document.hidden) {
-        uploadToCloud('interval').catch(() => {});
+        autoSyncWithCloud('interval').catch(() => {});
       }
     }, 60000);
   }
